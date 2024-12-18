@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wake Word Detector</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        #startBtn {
+            background-color: #4CAF50;
+            color: white;
+        }
+        #stopBtn {
+            background-color: #f44336;
+            color: white;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .status {
+            text-align: center;
+            margin: 20px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .model-card {
+            background-color: #fff;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .model-name {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .score-bar {
+            height: 20px;
+            background-color: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 5px 0;
+        }
+        .score-fill {
+            height: 100%;
+            background-color: #2196F3;
+            transition: width 0.3s ease;
+        }
+        .detected {
+            background-color: #4CAF50;
+        }
+        .status-text {
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Wake Word Detector</h1>
+        
+        <div class="controls">
+            <button id="startBtn">Start Detection</button>
+            <button id="stopBtn" disabled>Stop Detection</button>
+        </div>
+
+        <div class="status" id="micStatus">
+            Microphone: Not active
+        </div>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const socket = io();
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const micStatus = document.getElementById('micStatus');
+        const results = document.getElementById('results');
+
+        let isDetecting = false;
+
+        startBtn.addEventListener('click', async () => {
+            try {
+                await navigator.mediaDevices.getUserMedia({ audio: true });
+                socket.emit('start_detection');
+                isDetecting = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                micStatus.textContent = 'Microphone: Active';
+                micStatus.style.backgroundColor = '#e8f5e9';
+            } catch (err) {
+                console.error('Error accessing microphone:', err);
+                micStatus.textContent = 'Error: Could not access microphone';
+                micStatus.style.backgroundColor = '#ffebee';
+            }
+        });
+
+        stopBtn.addEventListener('click', () => {
+            socket.emit('stop_detection');
+            isDetecting = false;
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            micStatus.textContent = 'Microphone: Not active';
+            micStatus.style.backgroundColor = '';
+        });
+
+        socket.on('detection_update', (data) => {
+            results.innerHTML = '';
+            
+            for (const [modelName, result] of Object.entries(data)) {
+                const card = document.createElement('div');
+                card.className = 'model-card';
+                
+                const score = result.score;
+                const detected = result.detected;
+                
+                card.innerHTML = `
+                    <div class="model-name">${modelName}</div>
+                    <div class="score-bar">
+                        <div class="score-fill ${detected ? 'detected' : ''}" 
+                             style="width: ${score * 100}%"></div>
+                    </div>
+                    <div class="status-text">
+                        Score: ${(score * 100).toFixed(2)}% 
+                        ${detected ? '- Wake Word Detected!' : ''}
+                    </div>
+                `;
+                
+                results.appendChild(card);
+            }
+        });
+
+        // Handle connection status
+        socket.on('connect', () => {
+            console.log('Connected to server');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+            if (isDetecting) {
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                micStatus.textContent = 'Microphone: Connection lost';
+                micStatus.style.backgroundColor = '#ffebee';
+                isDetecting = false;
+            }
+        });
+    </script>
+</body>
+</html>
