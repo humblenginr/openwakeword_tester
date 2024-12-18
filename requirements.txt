@@ -1,0 +1,9 @@
+flask
+flask-socketio
+pyaudio
+numpy
+openwakeword
+python-engineio
+python-socketio
+eventlet
+gunicorn
