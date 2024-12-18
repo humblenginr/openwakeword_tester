@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     python3-dev \
+    libasound2-dev \
+    libportaudio2 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
