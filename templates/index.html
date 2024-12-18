@@ -1,182 +1,247 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wake Word Detector</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <title>Wake Word Detection</title>
     <style>
         body {
-            font-family: 'Arial', sans-serif;
+            font-family: Arial, sans-serif;
             max-width: 800px;
             margin: 0 auto;
             padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .container {
-            background-color: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #333;
             text-align: center;
         }
-        .controls {
+        .container {
+            margin-top: 50px;
+        }
+        .status-container {
+            margin: 20px 0;
+            padding: 20px;
+            border-radius: 10px;
+            background-color: #f5f5f5;
+        }
+        .detection-indicator {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            margin: 20px auto;
             display: flex;
+            align-items: center;
             justify-content: center;
-            gap: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            background-color: #f0f0f0;
+            border: 5px solid #ddd;
+        }
+        .detected {
+            background-color: #4CAF50;
+            color: white;
+            border-color: #45a049;
+            animation: pulse 1s;
+        }
+        .listening {
+            background-color: #2196F3;
+            color: white;
+            border-color: #1976D2;
+        }
+        .not-listening {
+            background-color: #f0f0f0;
+            color: #666;
+            border-color: #ddd;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        .controls {
             margin: 20px 0;
         }
         button {
             padding: 10px 20px;
+            margin: 0 10px;
+            font-size: 16px;
+            cursor: pointer;
             border: none;
             border-radius: 5px;
-            cursor: pointer;
-            font-size: 16px;
             transition: background-color 0.3s;
         }
         #startBtn {
             background-color: #4CAF50;
             color: white;
         }
+        #startBtn:hover {
+            background-color: #45a049;
+        }
         #stopBtn {
             background-color: #f44336;
             color: white;
+        }
+        #stopBtn:hover {
+            background-color: #da190b;
         }
         button:disabled {
             background-color: #cccccc;
             cursor: not-allowed;
         }
-        .status {
-            text-align: center;
-            margin: 20px 0;
-            padding: 10px;
-            border-radius: 5px;
-        }
-        .model-card {
-            background-color: #fff;
-            padding: 15px;
+        .score-display {
+            font-size: 24px;
             margin: 10px 0;
-            border-radius: 5px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-        .model-name {
-            font-weight: bold;
-            margin-bottom: 5px;
-        }
-        .score-bar {
-            height: 20px;
-            background-color: #e0e0e0;
-            border-radius: 10px;
-            overflow: hidden;
-            margin: 5px 0;
-        }
-        .score-fill {
-            height: 100%;
-            background-color: #2196F3;
-            transition: width 0.3s ease;
-        }
-        .detected {
-            background-color: #4CAF50;
-        }
-        .status-text {
             color: #666;
-            font-size: 14px;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Wake Word Detector</h1>
+        <h1>Wake Word Detection</h1>
         
+        <div class="status-container">
+            <div id="detection-circle" class="detection-indicator not-listening">
+                Not Listening
+            </div>
+            <div id="score" class="score-display">Score: 0%</div>
+        </div>
+
         <div class="controls">
             <button id="startBtn">Start Detection</button>
             <button id="stopBtn" disabled>Stop Detection</button>
         </div>
-
-        <div class="status" id="micStatus">
-            Microphone: Not active
-        </div>
-
-        <div id="results"></div>
+        
+        <div id="status">Ready</div>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script>
         const socket = io();
-        const startBtn = document.getElementById('startBtn');
-        const stopBtn = document.getElementById('stopBtn');
-        const micStatus = document.getElementById('micStatus');
-        const results = document.getElementById('results');
+        let audioContext;
+        let mediaStream;
+        let processor;
+        let isProcessing = false;
+        const SAMPLE_RATE = 16000;
+        const CHUNK_SIZE = 2048;
+        
+        function throttle(func, limit) {
+            let inThrottle;
+            return function(...args) {
+                if (!inThrottle) {
+                    func.apply(this, args);
+                    inThrottle = true;
+                    setTimeout(() => inThrottle = false, limit);
+                }
+            }
+        }
 
-        let isDetecting = false;
+        const logThrottled = throttle(console.log, 1000);
 
-        startBtn.addEventListener('click', async () => {
+        async function initAudio() {
             try {
-                await navigator.mediaDevices.getUserMedia({ audio: true });
-                socket.emit('start_detection');
-                isDetecting = true;
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
-                micStatus.textContent = 'Microphone: Active';
-                micStatus.style.backgroundColor = '#e8f5e9';
-            } catch (err) {
-                console.error('Error accessing microphone:', err);
-                micStatus.textContent = 'Error: Could not access microphone';
-                micStatus.style.backgroundColor = '#ffebee';
-            }
-        });
+                console.log("Initializing audio...");
+                audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+                console.log("Requesting microphone access...");
+                mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: SAMPLE_RATE,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    } 
+                });
+                console.log("Microphone access granted");
+                
+                const source = audioContext.createMediaStreamSource(mediaStream);
+                processor = audioContext.createScriptProcessor(CHUNK_SIZE, 1, 1);
+                source.connect(processor);
+                processor.connect(audioContext.destination);
 
-        stopBtn.addEventListener('click', () => {
+                let frameCount = 0;
+                processor.onaudioprocess = (e) => {
+                    if (!isProcessing) return;
+                    
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    const int16Data = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        int16Data[i] = inputData[i] * 32767;
+                    }
+                    
+                    frameCount++;
+                    if (frameCount % 30 === 0) {
+                        logThrottled(`Processing audio frame ${frameCount}`);
+                    }
+                    
+                    socket.emit('audio_data', int16Data.buffer);
+                };
+
+                document.getElementById('status').textContent = 'Audio initialized';
+                document.getElementById('detection-circle').className = 'detection-indicator listening';
+                document.getElementById('detection-circle').textContent = 'Listening';
+            } catch (error) {
+                console.error('Error initializing audio:', error);
+                document.getElementById('status').textContent = 'Error initializing audio: ' + error.message;
+            }
+        }
+
+        function startDetection() {
+            if (!audioContext) {
+                initAudio();
+            }
+            isProcessing = true;
+            socket.emit('start_detection');
+            document.getElementById('status').textContent = 'Detection started';
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            document.getElementById('detection-circle').className = 'detection-indicator listening';
+            document.getElementById('detection-circle').textContent = 'Listening';
+        }
+
+        function stopDetection() {
+            isProcessing = false;
             socket.emit('stop_detection');
-            isDetecting = false;
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
-            micStatus.textContent = 'Microphone: Not active';
-            micStatus.style.backgroundColor = '';
-        });
+            document.getElementById('status').textContent = 'Detection stopped';
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('detection-circle').className = 'detection-indicator not-listening';
+            document.getElementById('detection-circle').textContent = 'Not Listening';
+            document.getElementById('score').textContent = 'Score: 0%';
+        }
 
-        socket.on('detection_update', (data) => {
-            results.innerHTML = '';
+        document.getElementById('startBtn').addEventListener('click', startDetection);
+        document.getElementById('stopBtn').addEventListener('click', stopDetection);
+
+        let detectionTimeout;
+        socket.on('detection_update', function(results) {
+            const detectionCircle = document.getElementById('detection-circle');
+            const scoreDisplay = document.getElementById('score');
             
-            for (const [modelName, result] of Object.entries(data)) {
-                const card = document.createElement('div');
-                card.className = 'model-card';
+            for (const [model, data] of Object.entries(results)) {
+                const scorePercentage = (data.score * 100).toFixed(1);
+                scoreDisplay.textContent = `Score: ${scorePercentage}%`;
                 
-                const score = result.score;
-                const detected = result.detected;
-                
-                card.innerHTML = `
-                    <div class="model-name">${modelName}</div>
-                    <div class="score-bar">
-                        <div class="score-fill ${detected ? 'detected' : ''}" 
-                             style="width: ${score * 100}%"></div>
-                    </div>
-                    <div class="status-text">
-                        Score: ${(score * 100).toFixed(2)}% 
-                        ${detected ? '- Wake Word Detected!' : ''}
-                    </div>
-                `;
-                
-                results.appendChild(card);
+                if (data.detected) {
+                    detectionCircle.className = 'detection-indicator detected';
+                    detectionCircle.textContent = 'Wake Word Detected!';
+                    
+                    // Reset to listening state after 1 second
+                    clearTimeout(detectionTimeout);
+                    detectionTimeout = setTimeout(() => {
+                        if (isProcessing) {
+                            detectionCircle.className = 'detection-indicator listening';
+                            detectionCircle.textContent = 'Listening';
+                        }
+                    }, 1000);
+                } else if (isProcessing) {
+                    detectionCircle.className = 'detection-indicator listening';
+                    detectionCircle.textContent = 'Listening';
+                }
             }
         });
 
-        // Handle connection status
         socket.on('connect', () => {
-            console.log('Connected to server');
+            document.getElementById('status').textContent = 'Connected to server';
         });
 
         socket.on('disconnect', () => {
-            console.log('Disconnected from server');
-            if (isDetecting) {
-                startBtn.disabled = false;
-                stopBtn.disabled = true;
-                micStatus.textContent = 'Microphone: Connection lost';
-                micStatus.style.backgroundColor = '#ffebee';
-                isDetecting = false;
-            }
+            document.getElementById('status').textContent = 'Disconnected from server';
+            stopDetection();
         });
     </script>
 </body>
